@@ -8,65 +8,87 @@ export interface PixData {
 }
 
 export function generatePixCode(data: PixData): string {
-  const formatValue = (value: string): string => {
-    return String(value.length).padStart(2, '0') + value;
+  const formatValue = (id: string, value: string): string => {
+    const length = value.length.toString().padStart(2, '0');
+    return id + length + value;
   };
 
   const formatAmount = (amount: number): string => {
     return amount.toFixed(2);
   };
 
-  // PIX format according to BACEN specification
+  // PIX EMV format according to BACEN specification
   let pixString = '';
   
-  // Payload Format Indicator
-  pixString += '000201';
+  // Payload Format Indicator (obrigatório)
+  pixString += formatValue('00', '01');
   
-  // Point of Initiation Method (static = 11, dynamic = 12)
-  pixString += '010211';
-  
-  // Merchant Account Information
-  let merchantInfo = '';
-  merchantInfo += '0014BR.GOV.BCB.PIX'; // GUI
-  merchantInfo += formatValue(data.pixKey); // PIX Key
-  
-  pixString += '26' + formatValue(merchantInfo);
-  
-  // Merchant Category Code
-  pixString += '52040000';
-  
-  // Transaction Currency (BRL = 986)
-  pixString += '5303986';
-  
-  // Transaction Amount
+  // Point of Initiation Method - 12 para QR dinâmico com valor
   if (data.amount && data.amount > 0) {
-    const amountStr = formatAmount(data.amount);
-    pixString += '54' + formatValue(amountStr);
+    pixString += formatValue('01', '12');
+  } else {
+    pixString += formatValue('01', '11'); // QR estático
   }
   
-  // Country Code
-  pixString += '5802BR';
+  // Merchant Account Information (campo 26 para PIX)
+  let merchantInfo = '';
+  merchantInfo += formatValue('00', 'BR.GOV.BCB.PIX'); // GUI obrigatório
+  merchantInfo += formatValue('01', data.pixKey); // Chave PIX
   
-  // Merchant Name
-  pixString += '59' + formatValue(data.recipientName);
+  pixString += formatValue('26', merchantInfo);
   
-  // Merchant City
-  const city = data.city || 'SAO PAULO';
-  pixString += '60' + formatValue(city);
+  // Merchant Category Code (obrigatório)
+  pixString += formatValue('52', '0000');
   
-  // Additional Data Field Template
+  // Transaction Currency - 986 para Real brasileiro (obrigatório)
+  pixString += formatValue('53', '986');
+  
+  // Transaction Amount (se houver valor)
+  if (data.amount && data.amount > 0) {
+    const amountStr = formatAmount(data.amount);
+    pixString += formatValue('54', amountStr);
+  }
+  
+  // Country Code (obrigatório)
+  pixString += formatValue('58', 'BR');
+  
+  // Merchant Name (obrigatório)
+  let merchantName = data.recipientName.toUpperCase();
+  // Limitar a 25 caracteres conforme especificação
+  if (merchantName.length > 25) {
+    merchantName = merchantName.substring(0, 25);
+  }
+  pixString += formatValue('59', merchantName);
+  
+  // Merchant City (obrigatório)
+  let city = (data.city || 'SAO PAULO').toUpperCase();
+  // Limitar a 15 caracteres conforme especificação
+  if (city.length > 15) {
+    city = city.substring(0, 15);
+  }
+  pixString += formatValue('60', city);
+  
+  // Additional Data Field Template (opcional)
   if (data.description || data.txid) {
     let additionalData = '';
     if (data.txid) {
-      additionalData += '05' + formatValue(data.txid);
+      let txid = data.txid;
+      if (txid.length > 25) {
+        txid = txid.substring(0, 25);
+      }
+      additionalData += formatValue('05', txid);
     }
     if (data.description) {
-      additionalData += '02' + formatValue(data.description);
+      let desc = data.description;
+      if (desc.length > 72) {
+        desc = desc.substring(0, 72);
+      }
+      additionalData += formatValue('02', desc);
     }
-    pixString += '62' + formatValue(additionalData);
+    pixString += formatValue('62', additionalData);
   }
   
-  // CRC16
+  // CRC16 (obrigatório)
   pixString += '6304';
   const crc = calculateCRC16(pixString);
   pixString += crc;
@@ -78,13 +100,15 @@ function calculateCRC16(data: string): string {
   const polynomial = 0x1021;
   let crc = 0xFFFF;
   
-  for (let i = 0; i < data.length; i++) {
-    crc ^= (data.charCodeAt(i) << 8);
+  const bytes = new TextEncoder().encode(data);
+  
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= (bytes[i] << 8);
     for (let j = 0; j < 8; j++) {
       if (crc & 0x8000) {
         crc = (crc << 1) ^ polynomial;
       } else {
-        crc <<= 1;
+        crc = crc << 1;
       }
       crc &= 0xFFFF;
     }
